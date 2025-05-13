@@ -10,7 +10,7 @@ def conexao_db():
         "PORT=30123;"
         "PROTOCOL=TCPIP;"
         "UID=dba;"
-        "PWD=a9d9p8.E10;"
+        "PWD=testedba;"
     )
     try:
         conn = ibm_db.connect(dsn, "", "")

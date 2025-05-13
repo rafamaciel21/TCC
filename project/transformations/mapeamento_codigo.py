@@ -33,27 +33,50 @@ def mapear_cba(conn, codigo_barras):
         IDSUBPRODUTO 
     FROM    
         DBA.PRODUTO_GRADE
-    WHERE   IDCODBARPROD = ?
+    WHERE   IDCODBARPROD = REGEXP_REPLACE(?, '[^0-9]', '')
     UNION ALL 
     SELECT 
         IDPRODUTO, 
         IDSUBPRODUTO 
     FROM 
         DBA.PRODUTO_GRADE_CODBARCX 
-    WHERE   IDCODBARCX = ?
+    WHERE   IDCODBARCX = REGEXP_REPLACE(?, '[^0-9]', '')
+    limit 1
     """
     
     try:
         stmt = ibm_db.prepare(conn, sql)
         ibm_db.bind_param(stmt, 1, str(codigo_barras))
+        ibm_db.bind_param(stmt, 2, str(codigo_barras))
+        ibm_db.execute(stmt)
+        
+        row = ibm_db.fetch_tuple(stmt)
+        return {'idproduto': row[0], 'idsubproduto': row[1]} if row else None
+    except Exception as e:
+        print(f"[ERRO] Falha ao mapear CBA {codigo_barras}: {str(e)}")
+        return None
+
+def mapear_cpe(conn, codigo_produto_externo):
+    """Busca IDPRODUTO e IDSUBPRODUTO na tabela PRODUTO_GRADE  com base na coluna idsubprodutoexterno"""
+    sql = """
+            SELECT  
+                IDPRODUTO, 
+                IDSUBPRODUTO 
+            FROM    
+                DBA.PRODUTO_GRADE
+            WHERE   IDSUBPRODUTOEXTERNO = REGEXP_REPLACE(?, '[^0-9]', '')
+    """
+    
+    try:
+        stmt = ibm_db.prepare(conn, sql)
+        ibm_db.bind_param(stmt, 1, str(codigo_produto_externo))
         ibm_db.execute(stmt)
         
         row = ibm_db.fetch_tuple(stmt)
         return {'idproduto': row[0], 'idsubproduto': row[1]} if row else None
     except Exception as e:
         print(f"Erro no mapeamento CBA: {e}")
-        return None
-    
+        return None    
 
 def mapear_cpd(conn, table_name):
     """
@@ -79,8 +102,8 @@ def mapear_cpd(conn, table_name):
         update_tmp_query = f"""
         UPDATE {table_name}
         SET 
-            IDPRODUTO_TMP = TRIM(CODIGO_PRODUTO),
-            IDSUBPRODUTO_TMP = TRIM(CODIGO_PRODUTO_DERIVADO),
+            IDPRODUTO_TMP = TRIM(REGEXP_REPLACE(CODIGO_PRODUTO, '[^0-9]', '')),
+            IDSUBPRODUTO_TMP = trim(REGEXP_REPLACE(CODIGO_PRODUTO_DERIVADO, '[^0-9]', '')),
             OBSERVACAO = 'Mapeado via CPD - IDs diretos'
         WHERE 
             condicao = 'CPD'

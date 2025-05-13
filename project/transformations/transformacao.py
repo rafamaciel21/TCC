@@ -76,6 +76,7 @@ def create_table(conn, table_name):
         raise
 
 ########### Função que importa dados (CORRIGIDA)
+"""
 def importar_csv_para_tabela(caminho_csv, conn, table_name):
     try:
         with open(caminho_csv, mode="r", encoding="utf-8") as arquivo_csv:
@@ -117,7 +118,50 @@ def importar_csv_para_tabela(caminho_csv, conn, table_name):
         traceback.print_exc()
         ibm_db.rollback(conn)
         raise
-
+"""
+def importar_csv_para_tabela(caminho_csv, conn, table_name, batch_size=100):
+    try:
+        with open(caminho_csv, mode="r", encoding="utf-8") as arquivo_csv:
+            leitor_csv = csv.DictReader(arquivo_csv, delimiter=";")
+            colunas = [coluna.strip().upper() for coluna in leitor_csv.fieldnames]
+            
+            if not colunas:
+                raise ValueError("Arquivo CSV sem cabeçalho ou vazio.")
+            
+            placeholders = ", ".join(["?"] * len(colunas))
+            nomes_colunas = ", ".join(colunas)
+            query = f"INSERT INTO {table_name} ({nomes_colunas}) VALUES ({placeholders})"
+            
+            batch = []
+            for linha in leitor_csv:
+                linha_maiusculo = {chave.strip().upper(): valor for chave, valor in linha.items()}
+                valores = [linha_maiusculo[coluna] for coluna in colunas]
+                batch.append(valores)
+                
+                if len(batch) >= batch_size:
+                    stmt = ibm_db.prepare(conn, query)
+                    for row in batch:
+                        for i, valor in enumerate(row, start=1):
+                            ibm_db.bind_param(stmt, i, valor)
+                        ibm_db.execute(stmt)
+                    batch = []
+                    ibm_db.commit(conn)  # Commit a cada batch
+            
+            # Insere o restante (último lote)
+            if batch:
+                stmt = ibm_db.prepare(conn, query)
+                for row in batch:
+                    for i, valor in enumerate(row, start=1):
+                        ibm_db.bind_param(stmt, i, valor)
+                    ibm_db.execute(stmt)
+                ibm_db.commit(conn)
+            
+            print(f"Dados importados com sucesso para {table_name}.")
+    except Exception as e:
+        print(f"Erro ao importar CSV: {e}")
+        traceback.print_exc()
+        ibm_db.rollback(conn)
+        raise
 
 def atualizar_mapeamentos(conn, table_name):
     """
@@ -130,14 +174,15 @@ def atualizar_mapeamentos(conn, table_name):
         codigo_produto,
         codigo_produto_derivado,
         codigo_barras,
-        condicao
+        condicao,
+        codigo_produto_externo
     FROM {table_name}
-    WHERE condicao IN ('CBA', 'CCO','CPD')
+    WHERE condicao IN ('CBA', 'CCO','CPD','CPE')
     AND (IDPRODUTO IS NULL OR IDSUBPRODUTO IS NULL)
     """
     
     # Query de atualização usando os códigos como identificadores
-    update_query = f"""
+    update_query_cco = f"""
     UPDATE {table_name}
     SET 
         IDPRODUTO = ?,
@@ -148,7 +193,33 @@ def atualizar_mapeamentos(conn, table_name):
         AND codigo_produto_derivado = ?
         AND condicao = ?
     """
+
+    update_query_cba = f"""
+                            UPDATE {table_name}
+                            SET 
+                                IDPRODUTO = ?,
+                                IDSUBPRODUTO = ?,
+                                OBSERVACAO = ?
+                            WHERE  
+                                CODIGO_BARRAS = ?
+                                CONDICAO = ?
+                        """
     
+    update_query_cpe = f"""
+                            UPDATE {table_name}
+                            SET 
+                                IDPRODUTO = ?,
+                                IDSUBPRODUTO = ?,
+                                OBSERVACAO = ?
+                            WHERE  
+                                CODIGO_PRODUTO_EXTERNO = ?
+                                CONDICAO = ?
+                        """
+
+    total_atualizados_cba = 0
+    total_atualizados_cco = 0
+    total_atualizados_cpe = 0
+
     try:
         ibm_db.autocommit(conn, ibm_db.SQL_AUTOCOMMIT_OFF)
 
@@ -163,6 +234,7 @@ def atualizar_mapeamentos(conn, table_name):
             cod_deriv = row[1]
             cod_barras = row[2]
             condicao = row[3]
+            codigo_produto_externo = row[4]
             
             mapeamento = None
             obs = ""
@@ -173,23 +245,46 @@ def atualizar_mapeamentos(conn, table_name):
             elif condicao == 'CCO':
                 mapeamento = mapear_cco(conn, cod_prod, cod_deriv)
                 obs = f"Mapeado via CCO - Prod: {cod_prod}, Deriv: {cod_deriv}"
+            elif condicao == 'CPE':
+                mapeamento = mapear_cco(conn, codigo_produto_externo)
+                obs = f"Mapeado via CPE - Prod: {codigo_produto_externo}"
+    
     
                 
-            
+            #aqui executa os mapeamentos para relacionar o dado que está vindo da origem com o dado que existe no destino
             if mapeamento:
                 try:
-                    stmt_update = ibm_db.prepare(conn, update_query)
-                    ibm_db.bind_param(stmt_update, 1, mapeamento['idproduto'])
-                    ibm_db.bind_param(stmt_update, 2, mapeamento['idsubproduto'])
-                    ibm_db.bind_param(stmt_update, 3, obs)
-                    ibm_db.bind_param(stmt_update, 4, cod_prod)
-                    ibm_db.bind_param(stmt_update, 5, cod_deriv)
-                    ibm_db.bind_param(stmt_update, 6, condicao)
-                    
-                    if ibm_db.execute(stmt_update):
-                        total_atualizados += 1
+                    if condicao == 'CCO':
+                        stmt_update_cco = ibm_db.prepare(conn, update_query_cco)
+                        ibm_db.bind_param(stmt_update_cco, 1, mapeamento['idproduto'])
+                        ibm_db.bind_param(stmt_update_cco, 2, mapeamento['idsubproduto'])
+                        ibm_db.bind_param(stmt_update_cco, 3, obs)
+                        ibm_db.bind_param(stmt_update_cco, 4, cod_prod)
+                        ibm_db.bind_param(stmt_update_cco, 5, cod_deriv)
+                        ibm_db.bind_param(stmt_update_cco, 6, condicao)
+                        if ibm_db.execute(stmt_update_cco):
+                            total_atualizados_cco += 1
+                    elif condicao == 'CBA':
+                        stmt_update_cba = ibm_db.prepare(conn, update_query_cba)
+                        ibm_db.bind_param(stmt_update_cba, 1, mapeamento['idproduto'])
+                        ibm_db.bind_param(stmt_update_cba, 2, mapeamento['idsubproduto'])
+                        ibm_db.bind_param(stmt_update_cba, 3, obs)
+                        ibm_db.bind_param(stmt_update_cba, 4, cod_barras)
+                        ibm_db.bind_param(stmt_update_cba, 5, condicao)
+                        if ibm_db.execute(stmt_update_cba):
+                            total_atualizados_cba += 1
+                    elif condicao == 'CPE':
+                        stmt_update_cpe = ibm_db.prepare(conn, update_query_cpe)
+                        ibm_db.bind_param(stmt_update_cba, 1, mapeamento['idproduto'])
+                        ibm_db.bind_param(stmt_update_cba, 2, mapeamento['idsubproduto'])
+                        ibm_db.bind_param(stmt_update_cba, 3, obs)
+                        ibm_db.bind_param(stmt_update_cba, 4, codigo_produto_externo)
+                        ibm_db.bind_param(stmt_update_cba, 5, condicao)
+                        if ibm_db.execute(stmt_update_cba):
+                            total_atualizados_cpe += 1
+
                 except Exception as e:
-                    print(f"Erro ao atualizar {condicao} - Prod:{cod_prod}, Deriv:{cod_deriv}: {e}")
+                    print(f"Erro ao atualizar {condicao} - Prod:{cod_prod}, Deriv:{cod_deriv}, Extern:{codigo_produto_externo}, Barras:{cod_barras} : {str(e)}")
             
             row = ibm_db.fetch_tuple(stmt_select)
 
@@ -200,11 +295,14 @@ def atualizar_mapeamentos(conn, table_name):
             print(f"Registros CPD processados: {cpd_atualizados}")
         
         ibm_db.commit(conn)
-        print(f"Total de registros mapeados (CBA+CCO): {total_atualizados}")
+        print(f"Total de registros mapeados CBA: {total_atualizados_cba}")
+        print(f"Total de registros mapeados CBO: {total_atualizados_cco}")
+        print(f"Total de registros mapeados CBO: {total_atualizados_cpe}")
         
     except Exception as e:
         ibm_db.rollback(conn)
         print(f"Erro no processamento: {str(e)}")
+        ibm_db.rollback(conn)
         raise
     finally:
         ibm_db.autocommit(conn, ibm_db.SQL_AUTOCOMMIT_ON)
@@ -212,44 +310,119 @@ def atualizar_mapeamentos(conn, table_name):
 
 
 def ajusta_qtd(conn, table_name):
-    query_u_qtmp = f"""UPDATE {table_name}    SET Quantidade_Tmp             = REPLACE(Quantidade               , ',', '.')"""
-    query_u_qdef = f"""UPDATE {table_name}    SET QUANTIDADE_NOVO             = Quantidade_Tmp""" # Aqui será criado mais ajuste futuramente
+    query_u_qdef = f"""UPDATE {table_name}    SET QUANTIDADE_NOVO        = REPLACE(QUANTIDADE, ',', '.')"""
+    query_u_qdef_st = f"UPDATE {table_name}   SET STATUS                = 'Error',     OBSERVACAO  = 'Quantidade Inválida' where QUANTIDADE_NOVO < 0.001"
             
     
     try:
-        stmt_u_qtmp = ibm_db.prepare(conn,query_u_qtmp)
-        ibm_db.execute(stmt_u_qtmp)
-
         stmt_u_qdef = ibm_db.prepare(conn,query_u_qdef)
         ibm_db.execute(stmt_u_qdef)
+
+        stmt_u_qdef_st = ibm_db.prepare(conn,query_u_qdef_st)
+        ibm_db.execute(stmt_u_qdef_st)
 
         print("Quantidade ajustada!")
         ibm_db.commit(conn)
 
     except Exception as e:
         print(f"Erro ao ajustar a quantidade: {e}")
+        ibm_db.rollback(conn)
         raise
 
 def ajusta_custo(conn, table_name):
     
     
-    query_u_ctmp = f"""UPDATE {table_name}    SET Quantidade_Tmp             = REPLACE(Quantidade               , ',', '.')"""
-    query_u_cdef = f"""UPDATE {table_name}    SET QUANTIDADE_NOVO             = Quantidade_Tmp""" # Aqui será criado mais ajuste futuramente
-            
+    query_u_cdef = f"""UPDATE {table_name}  SET CUSTO_UNITARIO_NOVO        = REPLACE(CUSTO_UNITARIO, ',', '.')"""
+    query_u_cppp = f"""
+                        ALTER TABLE {table_name} ADD OBSERVACAO_CUSTO VARCHAR(100);
+                        UPDATE  {table_name} AS A 
+                        SET     A.CUSTO_UNITARIO_NOVO = CASE 
+                                                            WHEN PPP.CUSTONOTAFISCAL    > 0 THEN PPP.CUSTONOTAFISCAL
+                                                            WHEN PPP.CUSTOULTIMACOMPRA  > 0 THEN PPP.CUSTOULTIMACOMPRA
+                                                            WHEN PPP.VALCUSTOREPOS      > 0 THEN PPP.VALCUSTOREPOS
+                                                            WHEN PPP.CUSTOGERENCIAL     > 0 THEN PPP.CUSTOGERENCIAL
+                                                            ELSE '1'
+                                                        END,
+                                A.OBSERVACAO_CUSTO  = 'Custo alterado para o custo do produto no sistema.'
+                        FROM    DBA.POLITICA_PRECO_PRODUTO PPP
+                        WHERE   PPP.IDPRODUTO       = A.IDPRODUTO 
+                        AND     PPP.IDSUBPRODUTO    = A.IDSUBPRODUTO
+                        AND     PPP.IDEMPRESA       = A.IDEMPRESA
+                        AND     (   A.CUSTO_UNITARIO_NOVO = 0 OR 
+                                    A.CUSTO_UNITARIO_NOVO = '' OR 
+                                    A.CUSTO_UNITARIO_NOVO < 0
+                                );
+                    """    
     
     try:
-        stmt_u_ctmp = ibm_db.prepare(conn,query_u_ctmp)
-        ibm_db.execute(stmt_u_ctmp)
-
         stmt_u_cdef = ibm_db.prepare(conn,query_u_cdef)
         ibm_db.execute(stmt_u_cdef)
 
-        print("Quantidade ajustada!")
+        stmt_u_cppp = ibm_db.prepare(conn,query_u_cppp)
+        ibm_db.execute(stmt_u_cppp)
+
+        print("Custo ajustada!")
         ibm_db.commit(conn)
 
     except Exception as e:
-        print(f"Erro ao ajustar a quantidade: {e}")
+        print(f"Erro ao ajustar o custo: {e}")
+        ibm_db.rollback(conn)
         raise
-            
-    
 
+        
+
+            
+def ajusta_empresa(conn, table_name):
+    
+    
+    query_u_emp = f""" UPDATE {table_name} AS A    
+                        SET     A.IDEMPRESA        = E.IDEMPRESA
+                        FROM    DBA.EMPRESA E
+                        WHERE   E.IDEMPRESA         = A.EMPRESA
+                    """
+    query_u_emp_err = f"UPDATE {table_name}   SET Status = 'Error',     OBSERVACAO  = OBSERVACAO||'|Empresa não existe no sistema!' where IDEMPRESA IS NULL"    
+    
+    try:
+        stmt_u_emp = ibm_db.prepare(conn,query_u_emp)
+        ibm_db.execute(stmt_u_emp)
+
+        stmt_u_emp_err = ibm_db.prepare(conn,query_u_emp_err)
+        ibm_db.execute(stmt_u_emp_err)
+
+        print("Empresa ajustada!")
+        ibm_db.commit(conn)
+
+    except Exception as e:
+        print(f"Erro ao ajustar a empresa: {str(e)}")
+        ibm_db.rollback(conn)
+        raise    
+
+
+        
+def ajusta_local_estoque(conn, table_name):
+    
+    query_u_lest = f"""  UPDATE {table_name} AS A    
+                        SET     A.IDLOCALESTOQUE        = E.IDLOCALESTOQUE
+                        FROM    DBA.ESTOQUE_CADASTRO_LOCAL E
+                        WHERE   (
+                                    COALESCE(E.IDEMPRESABAIXAEST,0)     = A.IDEMPRESA OR 
+                                    COALESCE(E.IDEMPRESABAIXAEST,0)     = 0
+                                )
+                        AND     E.IDLOCALESTOQUE        = A.LOCAL_ESTOQUE
+                    """
+    query_u_lest_err = f"UPDATE {table_name}   SET Status = 'Error',     OBSERVACAO  = OBSERVACAO||'|Local de estoque não existe no sistema para a empresa!' where IDLOCALESTOQUE IS NULL"    
+    
+    try:
+        stmt_u_lest = ibm_db.prepare(conn,query_u_lest)
+        ibm_db.execute(stmt_u_lest)
+
+        stmt_u_lest_err = ibm_db.prepare(conn,query_u_lest_err)
+        ibm_db.execute(stmt_u_lest_err)
+
+        print("Local estoque ajustado!")
+        ibm_db.commit(conn)
+
+    except Exception as e:
+        print(f"Erro ao ajustar a local de estoque: {str(e)}")
+        ibm_db.rollback(conn)
+        raise    

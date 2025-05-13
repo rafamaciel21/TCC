@@ -7,7 +7,7 @@ start_time = time.time()
 
 from conection.connect_db import conexao_db
 from utilities.utilities import create_table_name
-from transformations.transformacao import create_table, importar_csv_para_tabela,atualizar_mapeamentos, ajusta_qtd
+from transformations.transformacao import create_table, importar_csv_para_tabela,atualizar_mapeamentos, ajusta_qtd,ajusta_empresa, ajusta_custo, ajusta_local_estoque
 import ibm_db
 
 
@@ -17,7 +17,7 @@ import ibm_db
 # Fluxo principal
 if __name__ == "__main__":
     conn = conexao_db()
-    caminho_arquivo_csv = "C:\\Conversao\\Dados\\estoque_10L.csv"
+    caminho_arquivo_csv = "C:\\Conversao\\Dados\\estoque_1m.csv"
     ##table_name = create_table_name("CONV.ESTOQUE_EMPRESA_LOG")
     table_name = "CONV.TESTE"
 
@@ -28,10 +28,13 @@ if __name__ == "__main__":
             print(f"Tentando criar a tabela: {table_name}")
 
             # Chama a função para criar a tabela
-            #create_table(conn, table_name)
-            #importar_csv_para_tabela(caminho_arquivo_csv, conn, table_name)
-            #atualizar_mapeamentos(conn, table_name)
+            create_table(conn, table_name)
+            importar_csv_para_tabela(caminho_arquivo_csv, conn, table_name)
+            atualizar_mapeamentos(conn, table_name)
+            ajusta_empresa(conn,table_name)
+            ajusta_local_estoque(conn,table_name)
             ajusta_qtd(conn, table_name)
+            ajusta_custo(conn,table_name)
 
         finally:
             # Fecha a conexão

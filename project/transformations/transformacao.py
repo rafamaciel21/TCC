@@ -2,7 +2,10 @@ import ibm_db
 import csv
 import traceback
 import pandas as pd
+import ibm_db_dbi
 from transformations.mapeamento_codigo import mapear_cba, mapear_cco, mapear_cpd
+import os
+from datetime import datetime
 
 
 def tabela_existe(conn, table_name):
@@ -20,8 +23,6 @@ def create_table(conn, table_name):
 
     create_sql = f"""
     CREATE TABLE {table_name} (
-        Step_Timestamp           TIMESTAMP DEFAULT CURRENT TIMESTAMP,
-        Step_Name               VARCHAR(100),
         Condicao                VARCHAR(100),
         Codigo_Produto          VARCHAR(100),
         Codigo_Produto_Derivado VARCHAR(100),
@@ -34,6 +35,8 @@ def create_table(conn, table_name):
         Lote                    VARCHAR(100),
         Quantidade              VARCHAR(100),
         Custo_Unitario          VARCHAR(100),
+        Step_Timestamp          TIMESTAMP DEFAULT CURRENT TIMESTAMP,
+        Step_Name               VARCHAR(100),
         IDEMPRESA               VARCHAR(100),
         IDLOCALESTOQUE          VARCHAR(100),
         IDPRODUTO_TMP           VARCHAR(100),
@@ -76,7 +79,7 @@ def create_table(conn, table_name):
         raise
 
 ########### Função que importa dados (CORRIGIDA)
-"""
+
 def importar_csv_para_tabela(caminho_csv, conn, table_name):
     try:
         with open(caminho_csv, mode="r", encoding="utf-8") as arquivo_csv:
@@ -118,45 +121,41 @@ def importar_csv_para_tabela(caminho_csv, conn, table_name):
         traceback.print_exc()
         ibm_db.rollback(conn)
         raise
-"""
-def importar_csv_para_tabela(caminho_csv, conn, table_name, batch_size=100):
+
+def importar_csv_para_tabela_pandas(caminho_csv, conn, table_name, batch_size=10000):
     try:
-        with open(caminho_csv, mode="r", encoding="utf-8") as arquivo_csv:
-            leitor_csv = csv.DictReader(arquivo_csv, delimiter=";")
-            colunas = [coluna.strip().upper() for coluna in leitor_csv.fieldnames]
-            
-            if not colunas:
-                raise ValueError("Arquivo CSV sem cabeçalho ou vazio.")
-            
-            placeholders = ", ".join(["?"] * len(colunas))
-            nomes_colunas = ", ".join(colunas)
-            query = f"INSERT INTO {table_name} ({nomes_colunas}) VALUES ({placeholders})"
-            
-            batch = []
-            for linha in leitor_csv:
-                linha_maiusculo = {chave.strip().upper(): valor for chave, valor in linha.items()}
-                valores = [linha_maiusculo[coluna] for coluna in colunas]
-                batch.append(valores)
-                
-                if len(batch) >= batch_size:
-                    stmt = ibm_db.prepare(conn, query)
-                    for row in batch:
-                        for i, valor in enumerate(row, start=1):
-                            ibm_db.bind_param(stmt, i, valor)
-                        ibm_db.execute(stmt)
-                    batch = []
-                    ibm_db.commit(conn)  # Commit a cada batch
-            
-            # Insere o restante (último lote)
-            if batch:
-                stmt = ibm_db.prepare(conn, query)
-                for row in batch:
-                    for i, valor in enumerate(row, start=1):
-                        ibm_db.bind_param(stmt, i, valor)
-                    ibm_db.execute(stmt)
-                ibm_db.commit(conn)
-            
-            print(f"Dados importados com sucesso para {table_name}.")
+        # Carregar o CSV no Pandas
+        df = pd.read_csv(caminho_csv, delimiter=";", encoding="utf-8", dtype=str)
+        df.columns = [coluna.strip().upper() for coluna in df.columns]  # Garantir nomes das colunas em maiúsculas
+        
+        # Substituir valores nulos ou inválidos com string vazia
+        df.fillna("", inplace=True)  # Substituir nulos por strings vazias
+
+        # Conectar ao banco usando o adaptador do ibm_db_dbi para Pandas
+        db_conn = ibm_db_dbi.Connection(conn)
+        
+        # Preparar a query de inserção
+        colunas = ", ".join(df.columns)
+        placeholders = ", ".join(["?"] * len(df.columns))
+        query = f"INSERT INTO {table_name} ({colunas}) VALUES ({placeholders})"
+        
+        # Dividir em lotes para melhor performance
+        for i in range(0, len(df), batch_size):
+            batch = df.iloc[i:i+batch_size].values.tolist()
+            try:
+                with db_conn.cursor() as cursor:
+                    cursor.executemany(query, batch)
+                print(f"Lote {i // batch_size + 1} inserido com sucesso.")
+            except Exception as e:
+                print(f"Erro ao inserir lote {i // batch_size + 1}: {e}")
+                traceback.print_exc()
+                db_conn.rollback()
+                raise
+        
+        # Commit final
+        db_conn.commit()
+        print(f"Dados importados com sucesso para {table_name}.")
+    
     except Exception as e:
         print(f"Erro ao importar CSV: {e}")
         traceback.print_exc()
@@ -426,3 +425,73 @@ def ajusta_local_estoque(conn, table_name):
         print(f"Erro ao ajustar a local de estoque: {str(e)}")
         ibm_db.rollback(conn)
         raise    
+
+
+def get_idplanilha(conn,table_name):
+    try:
+        get_planilha = """SELECT dba.uf_get_idplanilha ( ) AS IDPLANILHA FROM DBA.DUMMY"""
+        stmt_planilha = ibm_db.prepare(conn,get_planilha)
+        ibm_db.execute(stmt_planilha)
+        row = ibm_db.fetch_tuple(stmt_planilha)
+
+        if not row or row[0] is None:
+            raise ValueError("Nenhum valor retornado para IDPLANILHA.")
+
+        idplanilha = row[0]
+
+        query_update = f"""UPDATE {table_name} SET IDPLANILHA = ?"""
+
+        stmt = ibm_db.prepare(conn,query_update)
+        ibm_db.bind_param(stmt,1,idplanilha)
+        ibm_db.execute(stmt)
+    
+        ibm_db.commit(conn)
+        print(f"Planilha atualizada com o IDPLANILHA = {idplanilha}.")
+
+    except Exception as e:
+        print(f"Erro ao tentar capturar o idplanilha: {str(e)}")
+        ibm_db.rollback(conn)
+        raise
+
+def gera_sequencial(conn, table_name):
+    try:
+        query = f"""UPDATE {table_name} SET NUMSEQUENCIA = ROW_NUMBER()OVER()"""
+        stmt = ibm_db.prepare(conn,query)
+        ibm_db.execute(stmt)
+        ibm_db.commit
+
+        print("Sequência ajustada com sucesso!")
+    except Exception as e:
+        print(f"Erro ao gerar sequencia: {str(e)}")
+        ibm_db.rollback(conn)
+        raise
+
+
+
+def ajustar_datas(conn, table_name):
+    
+    try:
+        query = f"UPDATE {table_name} SET DTBALANCO = REPLACE(DATA_BALANCO,'/','-') WHERE LENGTH(DATA_BALANCO) = 10"
+        query_error = f"UPDATE {table_name} SET STATUS = 'Error', ERROR_DESCRIPTION = trim(coalesce(ERROR_DESCRIPTION,'')||' Data inválida!') WHERE DTBALANCO is null"
+
+        stmt = ibm_db.prepare(conn,query)
+        ibm_db.execute(stmt)
+
+        stmt_e = ibm_db.prepare(conn,query_error)
+        ibm_db.execute(stmt_e)
+
+        ibm_db.commit(conn)
+
+        # Contar registros inválidos
+        query_s = f"SELECT COUNT(*) FROM {table_name} WHERE DTBALANCO IS NULL"
+        stmt_s = ibm_db.exec_immediate(conn, query_s)
+        result = ibm_db.fetch_tuple(stmt_s)  # Buscar o resultado
+        invalid_count = result[0] if result else 0
+
+        print("Datas ajustadas com sucesso!")
+        print(f"Datas inválidas encontradas: {invalid_count}")
+
+    except Exception as e:
+        print(f"Erro ao ajustar datas: {e}")
+        ibm_db.rollback(conn)
+        raise

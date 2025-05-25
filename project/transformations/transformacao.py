@@ -79,50 +79,6 @@ def create_table(conn, table_name):
         ibm_db.rollback(conn)
         raise
 
-########### Função que importa dados (CORRIGIDA)
-"""
-def importar_csv_para_tabela(caminho_csv, conn, table_name):
-    try:
-        with open(caminho_csv, mode="r", encoding="utf-8") as arquivo_csv:
-            leitor_csv = csv.DictReader(arquivo_csv, delimiter=";")
-            colunas = [coluna.strip().upper() for coluna in leitor_csv.fieldnames]
-            
-            if not colunas:
-                raise ValueError("O arquivo CSV não possui cabeçalho ou está vazio.")
-            
-            # Corrigido: Nomes de colunas e tabela são interpolados diretamente
-            # Placeholders são usados apenas para valores
-            placeholders = ", ".join(["?"] * len(colunas))
-            nomes_colunas = ", ".join(colunas)
-            query = f"INSERT INTO {table_name} ({nomes_colunas}) VALUES ({placeholders})"
-            
-            for linha in leitor_csv:
-                linha_maiusculo = {chave.strip().upper(): valor for chave, valor in linha.items()}
-                valores = [linha_maiusculo[coluna] for coluna in colunas]
-                
-                try:
-                    stmt = ibm_db.prepare(conn, query)
-                    # Agora só precisamos vincular os valores dos dados
-                    for i, valor in enumerate(valores, start=1):
-                        ibm_db.bind_param(stmt, i, valor)
-                    ibm_db.execute(stmt)
-                except Exception as e:
-                    print(f"Erro ao inserir linha: {linha}")
-                    print(f"Query: {query}")
-                    print(f"Valores: {valores}")
-                    print(f"Erro detalhado: {e}")
-                    #traceback.print_exc()
-                    ibm_db.rollback(conn)
-                    return
-            
-            print(f"Dados importados com sucesso para {table_name}.")
-            ibm_db.commit(conn)
-    except Exception as e:
-        print(f"Erro ao importar CSV: {e}")
-        traceback.print_exc()
-        ibm_db.rollback(conn)
-        raise """
-
 def importar_csv_para_tabela_pandas(caminho_csv, conn, table_name, batch_size=10000):
     try:
         # Carregar o CSV no Pandas

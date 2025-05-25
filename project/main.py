@@ -11,25 +11,18 @@ import transformations.transformacao as transf
 import ibm_db
 
 
-
-
-
 # Fluxo principal
 if __name__ == "__main__":
     conn = conexao_db()
-    caminho_arquivo_csv = "C:\\Conversao\\Dados\\estoque_10L.csv"
-    ##table_name = create_table_name("CONV.ESTOQUE_EMPRESA_LOG")
-    table_name = "CONV.TESTE"
+    caminho_arquivo_csv = "C:\\Conversao\\Dados\\estoque_1m.csv"
+    table_name = create_table_name("CONV.ESTOQUE_EMPRESA_LOG")
+    #table_name = "CONV.TESTE"
 
     if conn:
         try:
-            # Gera o nome da tabela dinamicamente
             
             print(f"Tentando criar a tabela: {table_name}")
-
-            # Chama a função para criar a tabela
             transf.create_table(conn, table_name)
-            #transf.importar_csv_para_tabela(caminho_arquivo_csv, conn, table_name)
             transf.importar_csv_para_tabela_pandas(caminho_arquivo_csv, conn, table_name)
             transf.atualizar_mapeamentos(conn, table_name)
             transf.ajusta_empresa(conn,table_name)

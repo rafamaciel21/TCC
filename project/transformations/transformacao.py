@@ -37,19 +37,19 @@ def create_table(conn, table_name):
         Custo_Unitario          VARCHAR(100),
         Step_Timestamp          TIMESTAMP DEFAULT CURRENT TIMESTAMP,
         Step_Name               VARCHAR(100),
-        IDEMPRESA               VARCHAR(100),
-        IDLOCALESTOQUE          VARCHAR(100),
+        IDEMPRESA               INTEGER,
+        IDLOCALESTOQUE          INTEGER,
         IDPRODUTO_TMP           VARCHAR(100),
         IDSUBPRODUTO_TMP        VARCHAR(100),
         Quantidade_Tmp          VARCHAR(100),
         Custo_Unitario_Tmp      VARCHAR(100),
         Data_Balanco_Tmp        VARCHAR(100),
-        Quantidade_Novo         VARCHAR(100),
-        Custo_Unitario_Novo     VARCHAR(100),
+        Quantidade_Novo         NUMERIC(14,3),
+        Custo_Unitario_Novo     NUMERIC(14,2),
         Data_Balanco_Valid      VARCHAR(100),
         Codigo_Barras_Tmp       VARCHAR(100),
-        IDPRODUTO               VARCHAR(100),
-        IDSUBPRODUTO            VARCHAR(100),
+        IDPRODUTO               INTEGER,
+        IDSUBPRODUTO            INTEGER,
         Observacao              VARCHAR(500),
         IDLOTE                  VARCHAR(100),
         FLAGLOTE                VARCHAR(100),
@@ -57,7 +57,8 @@ def create_table(conn, table_name):
         IDPLANILHA              VARCHAR(100),
         NUMSEQUENCIA            VARCHAR(100),
         Status                  VARCHAR(100),
-        Error_Description       VARCHAR(500)
+        Error_Description       VARCHAR(500),
+        OBSERVACAO_CUSTO        VARCHAR(100)
     )
     """
     
@@ -79,7 +80,7 @@ def create_table(conn, table_name):
         raise
 
 ########### Função que importa dados (CORRIGIDA)
-
+"""
 def importar_csv_para_tabela(caminho_csv, conn, table_name):
     try:
         with open(caminho_csv, mode="r", encoding="utf-8") as arquivo_csv:
@@ -110,7 +111,7 @@ def importar_csv_para_tabela(caminho_csv, conn, table_name):
                     print(f"Query: {query}")
                     print(f"Valores: {valores}")
                     print(f"Erro detalhado: {e}")
-                    traceback.print_exc()
+                    #traceback.print_exc()
                     ibm_db.rollback(conn)
                     return
             
@@ -120,7 +121,7 @@ def importar_csv_para_tabela(caminho_csv, conn, table_name):
         print(f"Erro ao importar CSV: {e}")
         traceback.print_exc()
         ibm_db.rollback(conn)
-        raise
+        raise """
 
 def importar_csv_para_tabela_pandas(caminho_csv, conn, table_name, batch_size=10000):
     try:
@@ -169,29 +170,29 @@ def atualizar_mapeamentos(conn, table_name):
     """
     # Query para buscar registros não mapeados
     select_query = f"""
-    SELECT 
-        codigo_produto,
-        codigo_produto_derivado,
-        codigo_barras,
-        condicao,
-        codigo_produto_externo
-    FROM {table_name}
-    WHERE condicao IN ('CBA', 'CCO','CPD','CPE')
-    AND (IDPRODUTO IS NULL OR IDSUBPRODUTO IS NULL)
-    """
+                        SELECT 
+                            codigo_produto,
+                            codigo_produto_derivado,
+                            codigo_barras,
+                            condicao,
+                            codigo_produto_externo
+                        FROM {table_name}
+                        WHERE condicao IN ('CBA', 'CCO','CPD','CPE')
+                        AND (IDPRODUTO IS NULL OR IDSUBPRODUTO IS NULL)
+                    """
     
     # Query de atualização usando os códigos como identificadores
     update_query_cco = f"""
-    UPDATE {table_name}
-    SET 
-        IDPRODUTO = ?,
-        IDSUBPRODUTO = ?,
-        OBSERVACAO = ?
-    WHERE 
-        codigo_produto = ?
-        AND codigo_produto_derivado = ?
-        AND condicao = ?
-    """
+                            UPDATE {table_name}
+                            SET 
+                                IDPRODUTO = ?,
+                                IDSUBPRODUTO = ?,
+                                OBSERVACAO = ?
+                            WHERE 
+                                codigo_produto = ?
+                                AND codigo_produto_derivado = ?
+                                AND condicao = ?
+                        """
 
     update_query_cba = f"""
                             UPDATE {table_name}
@@ -215,6 +216,7 @@ def atualizar_mapeamentos(conn, table_name):
                                 CONDICAO = ?
                         """
 
+    # inicializando as variaveis de contagem
     total_atualizados_cba = 0
     total_atualizados_cco = 0
     total_atualizados_cpe = 0
@@ -222,11 +224,9 @@ def atualizar_mapeamentos(conn, table_name):
     try:
         ibm_db.autocommit(conn, ibm_db.SQL_AUTOCOMMIT_OFF)
 
-        # 1. Processa CBA e CCO (processamento linha a linha)
+        # Processa CBA e CCO (processamento linha a linha)
         stmt_select = ibm_db.exec_immediate(conn, select_query)
         row = ibm_db.fetch_tuple(stmt_select)
-        
-        total_atualizados = 0
         
         while row:
             cod_prod = row[0]
@@ -288,7 +288,7 @@ def atualizar_mapeamentos(conn, table_name):
             row = ibm_db.fetch_tuple(stmt_select)
 
             
-        # 2. Processa CPD (processamento em lote)
+        # Processa CPD (processamento em lote)
         cpd_atualizados = mapear_cpd(conn, table_name)
         if cpd_atualizados is not None:
             print(f"Registros CPD processados: {cpd_atualizados}")
@@ -307,12 +307,22 @@ def atualizar_mapeamentos(conn, table_name):
         ibm_db.autocommit(conn, ibm_db.SQL_AUTOCOMMIT_ON)
 
 
-
+#função que ajusta a quantidade a ser inserida no banco de dados.
 def ajusta_qtd(conn, table_name):
     query_u_qdef = f"""UPDATE {table_name}    SET QUANTIDADE_NOVO        = REPLACE(QUANTIDADE, ',', '.')"""
-    query_u_qdef_st = f"UPDATE {table_name}   SET STATUS                = 'Error',     OBSERVACAO  = 'Quantidade Inválida' where QUANTIDADE_NOVO < 0.001"
-            
-    
+    query_u_qdef_st =  f"""  UPDATE {table_name} 
+                            SET     STATUS              = 'Error', 
+                                    ERROR_DESCRIPTION   =   CASE 
+                                                                WHEN ERROR_DESCRIPTION IS NOT NULL THEN trim(coalesce(ERROR_DESCRIPTION,'')||'|Quantidade Inválida!') 
+                                                                ELSE 'Quantidade Inválida!'
+                                                            END,
+                                    Step_Name           =   CASE 
+                                                                WHEN Step_Name IS NULL THEN 'ajusta_qtd' 
+                                                                ELSE ''
+                                                            END 
+                            WHERE   
+                                    QUANTIDADE_NOVO < 0.001
+                        """
     try:
         stmt_u_qdef = ibm_db.prepare(conn,query_u_qdef)
         ibm_db.execute(stmt_u_qdef)
@@ -328,32 +338,36 @@ def ajusta_qtd(conn, table_name):
         ibm_db.rollback(conn)
         raise
 
+#função que ajusta o custo a ser importado
 def ajusta_custo(conn, table_name):
     
-    
-    query_u_cdef = f"""UPDATE {table_name}  SET CUSTO_UNITARIO_NOVO        = REPLACE(CUSTO_UNITARIO, ',', '.')"""
+    query_u_null = f"UPDATE {table_name}  SET CUSTO_UNITARIO = NULL WHERE TRIM(CUSTO_UNITARIO) = ''"
+    query_u_cdef = f"UPDATE {table_name}  SET CUSTO_UNITARIO_NOVO        = REPLACE(CUSTO_UNITARIO, ',', '.')"
     query_u_cppp = f"""
-                        ALTER TABLE {table_name} ADD OBSERVACAO_CUSTO VARCHAR(100);
                         UPDATE  {table_name} AS A 
-                        SET     A.CUSTO_UNITARIO_NOVO = CASE 
-                                                            WHEN PPP.CUSTONOTAFISCAL    > 0 THEN PPP.CUSTONOTAFISCAL
-                                                            WHEN PPP.CUSTOULTIMACOMPRA  > 0 THEN PPP.CUSTOULTIMACOMPRA
-                                                            WHEN PPP.VALCUSTOREPOS      > 0 THEN PPP.VALCUSTOREPOS
-                                                            WHEN PPP.CUSTOGERENCIAL     > 0 THEN PPP.CUSTOGERENCIAL
-                                                            ELSE '1'
-                                                        END,
-                                A.OBSERVACAO_CUSTO  = 'Custo alterado para o custo do produto no sistema.'
+                        SET     A.CUSTO_UNITARIO_NOVO   =   CASE 
+                                                                WHEN PPP.CUSTONOTAFISCAL    > 0 THEN PPP.CUSTONOTAFISCAL
+                                                                WHEN PPP.CUSTOULTIMACOMPRA  > 0 THEN PPP.CUSTOULTIMACOMPRA
+                                                                WHEN PPP.VALCUSTOREPOS      > 0 THEN PPP.VALCUSTOREPOS
+                                                                WHEN PPP.CUSTOGERENCIAL     > 0 THEN PPP.CUSTOGERENCIAL
+                                                                ELSE '1'
+                                                            END,
+                                A.OBSERVACAO_CUSTO      = 'Custo alterado para o custo do produto no sistema.'
                         FROM    DBA.POLITICA_PRECO_PRODUTO PPP
-                        WHERE   PPP.IDPRODUTO       = A.IDPRODUTO 
-                        AND     PPP.IDSUBPRODUTO    = A.IDSUBPRODUTO
-                        AND     PPP.IDEMPRESA       = A.IDEMPRESA
-                        AND     (   A.CUSTO_UNITARIO_NOVO = 0 OR 
-                                    A.CUSTO_UNITARIO_NOVO = '' OR 
-                                    A.CUSTO_UNITARIO_NOVO < 0
-                                );
+                        WHERE   PPP.IDPRODUTO               = A.IDPRODUTO 
+                        AND     PPP.IDSUBPRODUTO            = A.IDSUBPRODUTO
+                        AND     PPP.IDEMPRESA               = A.IDEMPRESA
+                        AND     (   A.CUSTO_UNITARIO_NOVO   = 0 OR 
+                                    A.CUSTO_UNITARIO_NOVO   < 0 OR
+                                    A.CUSTO_UNITARIO_NOVO   IS NULL 
+                                )
                     """    
     
     try:
+        
+        stmt_u_null = ibm_db.prepare(conn,query_u_null)
+        ibm_db.execute(stmt_u_null)
+
         stmt_u_cdef = ibm_db.prepare(conn,query_u_cdef)
         ibm_db.execute(stmt_u_cdef)
 
@@ -370,18 +384,36 @@ def ajusta_custo(conn, table_name):
 
         
 
-            
+#função que verifica se a empresa existe.            
 def ajusta_empresa(conn, table_name):
     
-    
-    query_u_emp = f""" UPDATE {table_name} AS A    
+    query_u_null = f"UPDATE {table_name} SET EMPRESA = NULL WHERE TRIM(EMPRESA) = ''"
+
+    query_u_emp = f"""  
+                        UPDATE {table_name} AS A    
                         SET     A.IDEMPRESA        = E.IDEMPRESA
                         FROM    DBA.EMPRESA E
-                        WHERE   E.IDEMPRESA         = A.EMPRESA
+                        WHERE   E.IDEMPRESA         = COALESCE(REGEXP_REPLACE(A.EMPRESA, '[^0-9]', ''),0)
+                        AND 	A.EMPRESA 			IS NOT NULL
                     """
-    query_u_emp_err = f"UPDATE {table_name}   SET Status = 'Error',     OBSERVACAO  = OBSERVACAO||'|Empresa não existe no sistema!' where IDEMPRESA IS NULL"    
-    
+    query_u_emp_err = f"""  UPDATE {table_name} 
+                            SET     STATUS              = 'Error', 
+                                    ERROR_DESCRIPTION   =   CASE 
+                                                                WHEN ERROR_DESCRIPTION IS NOT NULL THEN trim(coalesce(ERROR_DESCRIPTION,'')||'|Empresa não existe no sistema!') 
+                                                                ELSE 'Empresa não existe no sistema!'
+                                                            END,
+                                    Step_Name           =   CASE 
+                                                                WHEN Step_Name IS NULL THEN 'ajusta_empresa' 
+                                                                ELSE ''
+                                                            END 
+                            WHERE   
+                                    IDEMPRESA IS NULL
+                        """
+
     try:
+        stmt_u_null = ibm_db.prepare(conn,query_u_null)
+        ibm_db.execute(stmt_u_null)
+
         stmt_u_emp = ibm_db.prepare(conn,query_u_emp)
         ibm_db.execute(stmt_u_emp)
 
@@ -397,21 +429,39 @@ def ajusta_empresa(conn, table_name):
         raise    
 
 
-        
+#função para verificar o local de estoque        
 def ajusta_local_estoque(conn, table_name):
     
-    query_u_lest = f"""  UPDATE {table_name} AS A    
-                        SET     A.IDLOCALESTOQUE        = E.IDLOCALESTOQUE
+    query_u_null = f"UPDATE {table_name} SET LOCAL_ESTOQUE = NULL WHERE TRIM(LOCAL_ESTOQUE) = ''" 
+
+    query_u_lest = f"""  
+                        UPDATE {table_name} AS A    
+                        SET     A.IDLOCALESTOQUE                        = E.IDLOCALESTOQUE
                         FROM    DBA.ESTOQUE_CADASTRO_LOCAL E
                         WHERE   (
                                     COALESCE(E.IDEMPRESABAIXAEST,0)     = A.IDEMPRESA OR 
                                     COALESCE(E.IDEMPRESABAIXAEST,0)     = 0
                                 )
-                        AND     E.IDLOCALESTOQUE        = A.LOCAL_ESTOQUE
+                        AND     E.IDLOCALESTOQUE                        = COALESCE(REGEXP_REPLACE(A.LOCAL_ESTOQUE, '[^0-9]', ''),0)
+                        AND     A.LOCAL_ESTOQUE                         IS NOT NULL
                     """
-    query_u_lest_err = f"UPDATE {table_name}   SET Status = 'Error',     OBSERVACAO  = OBSERVACAO||'|Local de estoque não existe no sistema para a empresa!' where IDLOCALESTOQUE IS NULL"    
-    
+    query_u_lest_err = f"""  UPDATE {table_name} 
+                            SET     STATUS              = 'Error', 
+                                    ERROR_DESCRIPTION   =   CASE 
+                                                                WHEN ERROR_DESCRIPTION IS NOT NULL THEN trim(coalesce(ERROR_DESCRIPTION,'')||'|Local de estoque não existe no sistema para a empresa!') 
+                                                                ELSE 'Local de estoque não existe no sistema para a empresa!'
+                                                            END,
+                                    Step_Name           =   CASE 
+                                                                WHEN Step_Name IS NULL THEN 'ajusta_local_estoque' 
+                                                                ELSE ''
+                                                            END 
+                            WHERE   
+                                    IDLOCALESTOQUE IS NULL
+                        """
     try:
+        stmt_u_null = ibm_db.prepare(conn,query_u_null)
+        ibm_db.execute(stmt_u_null)
+
         stmt_u_lest = ibm_db.prepare(conn,query_u_lest)
         ibm_db.execute(stmt_u_lest)
 
@@ -426,10 +476,11 @@ def ajusta_local_estoque(conn, table_name):
         ibm_db.rollback(conn)
         raise    
 
-
+#função que cria uma planilha
 def get_idplanilha(conn,table_name):
     try:
         get_planilha = """SELECT dba.uf_get_idplanilha ( ) AS IDPLANILHA FROM DBA.DUMMY"""
+
         stmt_planilha = ibm_db.prepare(conn,get_planilha)
         ibm_db.execute(stmt_planilha)
         row = ibm_db.fetch_tuple(stmt_planilha)
@@ -453,6 +504,7 @@ def get_idplanilha(conn,table_name):
         ibm_db.rollback(conn)
         raise
 
+#função que gera uma sequencia
 def gera_sequencial(conn, table_name):
     try:
         query = f"""UPDATE {table_name} SET NUMSEQUENCIA = ROW_NUMBER()OVER()"""
@@ -467,12 +519,24 @@ def gera_sequencial(conn, table_name):
         raise
 
 
-
+#função que verifica a data.
 def ajustar_datas(conn, table_name):
     
     try:
         query = f"UPDATE {table_name} SET DTBALANCO = REPLACE(DATA_BALANCO,'/','-') WHERE LENGTH(DATA_BALANCO) = 10"
-        query_error = f"UPDATE {table_name} SET STATUS = 'Error', ERROR_DESCRIPTION = trim(coalesce(ERROR_DESCRIPTION,'')||' Data inválida!') WHERE DTBALANCO is null"
+        query_error = f"""  UPDATE {table_name} 
+                            SET     STATUS              = 'Error', 
+                                    ERROR_DESCRIPTION   =   CASE 
+                                                                WHEN ERROR_DESCRIPTION IS NOT NULL THEN trim(coalesce(ERROR_DESCRIPTION,'')||' Data inválida!') 
+                                                                ELSE 'Data inválida!'
+                                                            END,
+                                    Step_Name           =   CASE 
+                                                                WHEN Step_Name IS NULL THEN 'ajustar_datas' 
+                                                                ELSE ''
+                                                            END 
+                            WHERE   
+                                    DTBALANCO IS NULL 
+                        """
 
         stmt = ibm_db.prepare(conn,query)
         ibm_db.execute(stmt)
@@ -495,3 +559,119 @@ def ajustar_datas(conn, table_name):
         print(f"Erro ao ajustar datas: {e}")
         ibm_db.rollback(conn)
         raise
+
+
+def insert_tabela_estoque_balanco(conn, table_name):
+    try:
+        query = f"""
+                    INSERT INTO DBA.ESTOQUE_BALANCO(IDPRODUTO, IDSUBPRODUTO, IDPLANILHA, NUMSEQUENCIA, IDEMPRESA, IDLOCALESTOQUE, IDLOTE,  DTBALANCO, QTDCONTADA, CUSTOUNITARIO, IDUSUARIO, DESCRBALANCO )
+                    SELECT 
+                        IDPRODUTO, 
+                        IDSUBPRODUTO, 
+                        IDPLANILHA, 
+                        NUMSEQUENCIA, 
+                        IDEMPRESA, 
+                        IDLOCALESTOQUE, 
+                        NULL AS IDLOTE,  
+                        DTBALANCO, 
+                        QUANTIDADE_NOVO AS QTDCONTADA, 
+                        CUSTO_UNITARIO_NOVO AS CUSTOUNITARIO, 
+                        2  AS IDUSUARIO, 
+                        'ORIGINÁRIO DE CONVERSAO' AS DESCRBALANCO 
+                    FROM 
+                        {table_name}
+                    WHERE 
+                        COALESCE(Status,'') <> 'Error'
+
+                """
+        stmt = ibm_db.prepare(conn,query)
+        ibm_db.execute(stmt)
+        ibm_db.commit(conn)
+        print("Dados inseridos!")    
+
+    except Exception as e:
+        print(f"Erro ao inserir os dados na tabela final:{str(e)}")
+        traceback.print_exc()
+        ibm_db.rollback(conn)
+        raise
+
+
+def gera_relatorio(conn, table_name):
+        try: 
+            query_erro =    f"""
+                                SELECT  CODIGO_PRODUTO,
+                                        CODIGO_PRODUTO_DERIVADO,
+                                        CODIGO_PRODUTO_EXTERNO,
+                                        DESCRICAO,
+                                        EMPRESA,
+                                        LOCAL_ESTOQUE, 
+                                        LOTE,
+                                        QUANTIDADE, 
+                                        DATA_BALANCO, 
+                                        CUSTO_UNITARIO,
+                                        ERROR_DESCRIPTION AS OBSERVACAO
+                                FROM 
+                                        {table_name}
+                                WHERE 
+                                        STATUS = 'Error'
+                            """   
+            
+            query_custo =   f"""
+                                    SELECT  
+                                            CODIGO_PRODUTO,
+                                            CODIGO_PRODUTO_DERIVADO,
+                                            CODIGO_PRODUTO_EXTERNO,
+                                            DESCRICAO,
+                                            EMPRESA,
+                                            LOTE,
+                                            LOCAL_ESTOQUE, 
+                                            QUANTIDADE, 
+                                            DATA_BALANCO, 
+                                            CUSTO_UNITARIO,
+                                            OBSERVACAO_CUSTO AS OBSERVACAO
+                                    FROM 
+                                            {table_name}
+                                    WHERE 
+                                            COALESCE(Status,'') <> 'Error' AND 
+                                            OBSERVACAO_CUSTO IS NOT NULL  
+                            """
+
+            # Preparar e executar a query de erro
+            stmt_err = ibm_db.exec_immediate(conn, query_erro)
+            rows_err = []
+            row = ibm_db.fetch_assoc(stmt_err)
+            while row:
+                rows_err.append(row)
+                row = ibm_db.fetch_assoc(stmt_err)
+
+            # Salvar resultados de erro em CSV
+            with open(rf"C:\Conversao\Logs\produto\Produtos_nao_importados_{table_name.split('.')[-1]}.csv", "w", newline='', encoding="utf-8") as file:
+                if rows_err:
+                    writer = csv.DictWriter(file, fieldnames=rows_err[0].keys(),delimiter=';')
+                    writer.writeheader()
+                    writer.writerows(rows_err)
+                else:
+                    print("Nenhuma linha foi retornada para a query de error.")
+
+            # Preparar e executar a query de custo
+            stmt_custo = ibm_db.exec_immediate(conn, query_custo)
+            rows_custo = []
+            row = ibm_db.fetch_assoc(stmt_custo)
+            while row:
+                rows_custo.append(row)
+                row = ibm_db.fetch_assoc(stmt_custo)
+
+            # Salvar resultados de custo em CSV
+            with open(rf"C:\Conversao\Logs\produto\Custos_alterados_{table_name.split('.')[-1]}.csv", "w", newline='', encoding="utf-8") as file:
+                if rows_custo:
+                    writer = csv.DictWriter(file, fieldnames=rows_custo[0].keys(),delimiter=';')
+                    writer.writeheader()
+                    writer.writerows(rows_custo)
+                else:
+                    print("Nenhuma linha foi retornada para a query de custo.")
+
+            print("Relatórios gerados com sucesso!")   
+        except Exception as e:
+            print(f"Erro ao gerar o relatório:{str(e)}")
+            ibm_db.rollback(conn)
+            raise

@@ -28,17 +28,19 @@ if __name__ == "__main__":
             print(f"Tentando criar a tabela: {table_name}")
 
             # Chama a função para criar a tabela
-            #transf.create_table(conn, table_name)
+            transf.create_table(conn, table_name)
             #transf.importar_csv_para_tabela(caminho_arquivo_csv, conn, table_name)
-            #transf.importar_csv_para_tabela_pandas(caminho_arquivo_csv, conn, table_name)
-            """transf.atualizar_mapeamentos(conn, table_name)
+            transf.importar_csv_para_tabela_pandas(caminho_arquivo_csv, conn, table_name)
+            transf.atualizar_mapeamentos(conn, table_name)
             transf.ajusta_empresa(conn,table_name)
             transf.ajusta_local_estoque(conn,table_name)
             transf.ajusta_qtd(conn, table_name)
             transf.ajusta_custo(conn,table_name)
             transf.get_idplanilha(conn,table_name)
-            transf.gera_sequencial(conn,table_name)"""
+            transf.gera_sequencial(conn,table_name)
             transf.ajustar_datas(conn,table_name)
+            transf.insert_tabela_estoque_balanco(conn, table_name)
+            transf.gera_relatorio(conn,table_name)
 
         finally:
             

@@ -1,5 +1,6 @@
 
 import time
+from  datetime import timedelta
 
 # Marca o tempo de início
 start_time = time.time()
@@ -22,7 +23,7 @@ if __name__ == "__main__":
         try:
             
             print(f"Tentando criar a tabela: {table_name}")
-            transf.create_table(conn, table_name)
+            transf.create_table(conn, table_name) 
             transf.importar_csv_para_tabela_pandas(caminho_arquivo_csv, conn, table_name)
             transf.atualizar_mapeamentos(conn, table_name)
             transf.ajusta_empresa(conn,table_name)
@@ -44,7 +45,8 @@ if __name__ == "__main__":
 # Marca o tempo de término
 end_time = time.time() 
 
-
+execution_time_seconds = end_time - start_time
 # Calcula o tempo de execução
-execution_time = (end_time - start_time)/60
-print(f"Tempo total de execução do script: {execution_time:.2f} minutos")
+execution_time_formatted = str(timedelta(seconds=execution_time_seconds))
+
+print(f"Tempo total de execução do script: {execution_time_formatted}")

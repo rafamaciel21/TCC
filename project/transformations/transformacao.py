@@ -86,7 +86,7 @@ def importar_csv_para_tabela_pandas(caminho_csv, conn, table_name, batch_size=10
         df.columns = [coluna.strip().upper() for coluna in df.columns]  # Garantir nomes das colunas em maiúsculas
         
         # Substituir valores nulos ou inválidos com string vazia
-        df.fillna("", inplace=True)  # Substituir nulos por strings vazias
+        df.fillna("", inplace=True)  
 
         # Conectar ao banco usando o adaptador do ibm_db_dbi para Pandas
         db_conn = ibm_db_dbi.Connection(conn)
@@ -519,6 +519,7 @@ def ajustar_datas(conn, table_name):
 
 def insert_tabela_estoque_balanco(conn, table_name):
     try:
+        query_limpa = f"delete from dba.estoque_balanco"
         query = f"""
                     INSERT INTO DBA.ESTOQUE_BALANCO(IDPRODUTO, IDSUBPRODUTO, IDPLANILHA, NUMSEQUENCIA, IDEMPRESA, IDLOCALESTOQUE, IDLOTE,  DTBALANCO, QTDCONTADA, CUSTOUNITARIO, IDUSUARIO, DESCRBALANCO )
                     SELECT 
@@ -533,13 +534,17 @@ def insert_tabela_estoque_balanco(conn, table_name):
                         QUANTIDADE_NOVO AS QTDCONTADA, 
                         CUSTO_UNITARIO_NOVO AS CUSTOUNITARIO, 
                         2  AS IDUSUARIO, 
-                        'ORIGINÁRIO DE CONVERSAO' AS DESCRBALANCO 
+                        'ORIGINÁRIO DE CONVERSAO PY' AS DESCRBALANCO 
                     FROM 
                         {table_name}
                     WHERE 
                         COALESCE(Status,'') <> 'Error'
 
                 """
+        
+        stmt_l = ibm_db.prepare(conn,query_limpa)
+        ibm_db.execute(stmt_l)
+
         stmt = ibm_db.prepare(conn,query)
         ibm_db.execute(stmt)
         ibm_db.commit(conn)
